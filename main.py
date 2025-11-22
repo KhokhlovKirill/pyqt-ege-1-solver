@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (QApplication, QGraphicsView, QGraphicsScene,
 from PySide6.QtCore import Qt, QRectF, QLineF, QPointF, Signal, QObject
 from PySide6.QtGui import QPen, QBrush, QColor, QPainter, QPainterPathStroker, QAction
 
+from modules.Solver import Solver
+
 
 # ==========================================
 # 1. Configuration (Конфигурация)
@@ -185,6 +187,27 @@ class GraphManager(QObject):
     def get_node_count(self) -> int:
         return sum(1 for item in self.scene.items() if isinstance(item, NodeItem))
 
+    def get_nodes_named_links(self):
+        edges_dict = dict()
+        edges_set = set()
+        for item in self.scene.items():
+            if not isinstance(item, NodeItem):
+                continue
+            for edge in item.edges:
+                edges_set.add(edge)
+
+        for edge in edges_set:
+            if edge.source.name not in edges_dict:
+                edges_dict[edge.source.name] = [edge.dest.name]
+            else:
+                edges_dict[edge.source.name].append(edge.dest.name)
+
+            if edge.dest.name not in edges_dict:
+                edges_dict[edge.dest.name] = [edge.source.name]
+            else:
+                edges_dict[edge.dest.name].append(edge.source.name)
+        return edges_dict
+
     def is_position_valid(self, pos: QPointF) -> bool:
         for item in self.scene.items():
             if isinstance(item, NodeItem):
@@ -291,7 +314,7 @@ class WeightMatrixWidget(QTableWidget):
             row_data = []
             for c in range(rows):
                 item = self.item(r, c)
-                row_data.append(item.text() if item else None)
+                row_data.append(int(item.text()) if item.text() != '' else None)
             data.append(row_data)
         return data
 
@@ -409,6 +432,10 @@ class MainWindow(QMainWindow):
         menu = self.menuBar()
         file_menu = menu.addMenu("Файл")
 
+        start_solver = QAction("Решить", self)
+        start_solver.triggered.connect(self.solve)
+        file_menu.addAction(start_solver)
+
         save_action = QAction("Сохранить упражнение...", self)
         save_action.triggered.connect(self.save_exercise)
         file_menu.addAction(save_action)
@@ -427,7 +454,11 @@ class MainWindow(QMainWindow):
         file_menu.addAction(debug_btn)
 
     def print_debug(self):
-        print(self.matrix_widget.get_data())
+        pass
+
+    def solve(self):
+        solver = Solver(self.matrix_widget.get_data(), self.graph_manager.get_nodes_named_links())
+        print(solver.solve())
 
     def clear_all(self):
         self.graph_manager.reset()
