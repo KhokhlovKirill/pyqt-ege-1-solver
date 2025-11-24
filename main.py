@@ -19,7 +19,7 @@ from modules.Solver import Solver
 # 1. Configuration (Конфигурация)
 # ==========================================
 class GraphConfig:
-    NODE_DIAMETER = 20  # Чуть больше, чтобы было виднее
+    NODE_DIAMETER = 20
     NODE_RADIUS = NODE_DIAMETER / 2
     EDGE_WIDTH = 2
     MIN_DISTANCE = 40
@@ -208,6 +208,15 @@ class GraphManager(QObject):
                 edges_dict[edge.dest.name].append(edge.source.name)
         return edges_dict
 
+    def get_edges_count(self):
+        edges_set = set()
+        for item in self.scene.items():
+            if not isinstance(item, NodeItem):
+                continue
+            for edge in item.edges:
+                edges_set.add(edge)
+        return len(edges_set)
+
     def is_position_valid(self, pos: QPointF) -> bool:
         for item in self.scene.items():
             if isinstance(item, NodeItem):
@@ -221,8 +230,10 @@ class GraphManager(QObject):
 # 4. Matrix Widget (Таблица весов)
 # ==========================================
 class WeightMatrixWidget(QTableWidget):
-    def __init__(self):
+    def __init__(self, graph, main_window):
         super().__init__()
+        self.graph = graph
+        self.main_window = main_window
         self.setColumnCount(0)
         self.setRowCount(0)
         self.setWindowTitle("Матрица весов")
@@ -289,6 +300,12 @@ class WeightMatrixWidget(QTableWidget):
 
         self.blockSignals(False)
 
+    def update_headers(self, new_headers):
+        if len(new_headers) != len(self.get_data()):
+            raise TypeError('New headers must contain same count of names as matrix')
+        self.setHorizontalHeaderLabels(new_headers)
+        self.setVerticalHeaderLabels(new_headers)
+
     def on_item_changed(self, item):
         """Обеспечивает симметричность матрицы"""
         row = item.row()
@@ -307,14 +324,34 @@ class WeightMatrixWidget(QTableWidget):
 
         self.blockSignals(False)
 
-    def get_data(self) -> List[List[str]]:
+        # Запуск решателя при совпадении количества ребер и заполненных ячеек
+        count_filled_cells = 0
+        current_state = self.get_data()
+        for y in range(len(current_state)):
+            for x in range(len(current_state[y])):
+                if current_state[y][x] is not None:
+                    count_filled_cells += 1
+        if count_filled_cells == self.graph.get_edges_count() * 2:
+            self.main_window.solve()
+        elif count_filled_cells > self.graph.get_edges_count() * 2:
+            self.main_window.error_label.setText('Ошибка! Заполнено слишком много полей в матрице!')
+            new_headers = [*map(str, range(1, self.graph.get_node_count() + 1))]
+            self.update_headers(new_headers)
+        else:
+            new_headers = [*map(str, range(1, self.graph.get_node_count() + 1))]
+            self.update_headers(new_headers)
+
+    def get_data(self, is_json=False) -> List[List[int|None]]:
         rows = self.rowCount()
         data = []
         for r in range(rows):
             row_data = []
             for c in range(rows):
                 item = self.item(r, c)
-                row_data.append(int(item.text()) if item.text() != '' else None)
+                if not is_json:
+                    row_data.append(int(item.text()) if item.text() != '' else None)
+                else:
+                    row_data.append(item.text())
             data.append(row_data)
         return data
 
@@ -399,7 +436,7 @@ class MainWindow(QMainWindow):
         self.view = QGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing)
 
-        self.matrix_widget = WeightMatrixWidget()
+        self.matrix_widget = WeightMatrixWidget(self.graph_manager, self)
 
         # 3. Связь Граф -> Таблица
         self.graph_manager.node_count_changed.connect(self.matrix_widget.update_size)
@@ -411,7 +448,10 @@ class MainWindow(QMainWindow):
         # Левая часть (Матрица)
         left_layout = QVBoxLayout()
         left_label = QLabel("Матрица весов (Симметричная)")
+        self.error_label = QLabel("")
+        self.error_label.setStyleSheet('color: red')
         left_layout.addWidget(left_label)
+        left_layout.addWidget(self.error_label)
         left_layout.addWidget(self.matrix_widget)
 
         # Правая часть (Граф)
@@ -448,17 +488,14 @@ class MainWindow(QMainWindow):
         clear_action.triggered.connect(self.clear_all)
         file_menu.addAction(clear_action)
 
-        # ToDo: удалить отладочную функцию
-        debug_btn = QAction("Вывести отладочные данные в консоль", self)
-        debug_btn.triggered.connect(self.print_debug)
-        file_menu.addAction(debug_btn)
-
-    def print_debug(self):
-        pass
-
     def solve(self):
         solver = Solver(self.matrix_widget.get_data(), self.graph_manager.get_nodes_named_links())
-        print(solver.solve())
+        try:
+            self.matrix_widget.update_headers(tuple(solver.solve()))
+            self.error_label.setText('')
+        except:
+            self.error_label.setText('Ошибка при расчете! Проверьте введенные данные!')
+
 
     def clear_all(self):
         self.graph_manager.reset()
@@ -498,7 +535,7 @@ class MainWindow(QMainWindow):
                         edges_data.append({"u": u_id, "v": v_id})
 
         # Сбор данных матрицы
-        matrix_data = self.matrix_widget.get_data()
+        matrix_data = self.matrix_widget.get_data(is_json=True)
 
         data = {
             "graph": {
@@ -510,7 +547,7 @@ class MainWindow(QMainWindow):
         }
 
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
+            with open(file_path+'.json', 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
             QMessageBox.information(self, "Успех", "Упражнение сохранено!")
         except Exception as e:
@@ -554,6 +591,7 @@ class MainWindow(QMainWindow):
             # 3. Восстановление матрицы
             matrix_data = data.get("matrix", [])
             self.matrix_widget.set_data(matrix_data)
+            self.solve()
 
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить файл: {e}")
